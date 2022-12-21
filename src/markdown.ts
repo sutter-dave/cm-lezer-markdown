@@ -41,6 +41,7 @@ class CompositeBlock {
 export enum Type {
   Document = 1,
 
+  ReactiveCell,
   CodeBlock,
   FencedCode,
   Blockquote,
@@ -333,6 +334,16 @@ function isHTMLBlock(line: Line, _cx: BlockContext, breaking: boolean) {
   return -1
 }
 
+const ReactiveCellStyle = [
+  /^[a-zA-Z_]+[a-zA-Z0-9_]*[ \t]*=/
+]
+
+function isReactiveCell(line: Line, _cx: BlockContext) {
+  for (let i = 0, e = ReactiveCellStyle.length; i < e; i++)
+    if (ReactiveCellStyle[i].test(line.text)) return i
+  return -1
+}
+
 function getListIndent(line: Line, pos: number) {
   let indentAfter = line.countIndent(pos, line.pos, line.indent)
   let indented = line.countIndent(line.skipSpace(pos), pos, indentAfter)
@@ -363,6 +374,47 @@ function addCodeText(marks: Element[], from: number, to: number) {
 // leaf block. Otherwise, it is assumed to have opened a context.
 const DefaultBlockParsers: {[name: string]: ((cx: BlockContext, line: Line) => BlockResult) | undefined} = {
   LinkReference: undefined,
+
+  ReactiveCell(cx, line) {
+    //start of block - use regexp to identify first line
+    // - (varName)(space)(=)(anything else the rest of the line - but maybe not an initial equals?)
+    //
+    // continue block
+    // - indent of at least two spaces (for now - must be four spaces)
+    // - close bracket (no space, or maybe allow 1 space?) - This is the last line
+    // otherwise, end the block
+
+    //NOTES - CodeBlock appears in "not last". I may need to put ths there too.
+
+    let type = isReactiveCell(line, cx)
+    if (type == -1) return false
+  
+    let continueIndent = 2 //for now, require four spacees, at least
+    
+    // let start = line.findColumn(base)
+    let from = cx.lineStart, to = cx.lineStart + line.text.length
+    let marks: Element[] = []
+    addCodeText(marks, from, to)
+
+    let ended = false
+    while (cx.nextLine() && line.depth >= cx.stack.length) {
+      if ( ((line.indent < continueIndent) && (line.text.charAt(0) != '}')) || ended) {
+        break
+      } else {
+        //if we have a closing bracket at the line start, this is the last line
+        if(line.text.charAt(0) == '}') ended = true
+
+        addCodeText(marks, cx.lineStart - 1, cx.lineStart)
+        for (let m of line.markers) marks.push(m)
+        to = cx.lineStart + line.text.length
+        let codeStart = cx.lineStart
+        if (codeStart < to) addCodeText(marks, codeStart, to)
+      }
+    }
+
+    cx.addNode(cx.buffer.writeElements(marks, -from).finish(Type.CodeBlock, to - from), from)
+    return true
+  },
 
   IndentedCode(cx, line) {
     let base = line.baseIndent + 4
